@@ -6,46 +6,105 @@ import static org.postgresql.pljava.annotation.Function.Effects.IMMUTABLE;
 import static org.postgresql.pljava.annotation.Function.OnNullInput.RETURNS_NULL;
 
 import java.security.MessageDigest;
+import java.security.InvalidKeyException;
 import java.security.NoSuchAlgorithmException;
 import java.util.Random;
 import java.util.Base64;
 import java.util.Base64.Decoder;
+import java.util.Base64.Encoder;
+import javax.crypto.Mac;
+import javax.crypto.spec.SecretKeySpec;
+import java.util.Arrays;
+
+class HmacMd5{
+	private static final String HMAC_MD5_ALGORITHM = "HmacMD5";
+	private static Mac cachedMac = null;
+
+    public byte[] getHash(byte[] key, byte[] data) throws NoSuchAlgorithmException, InvalidKeyException {
+		if (cachedMac==null){
+			cachedMac = Mac.getInstance(HMAC_MD5_ALGORITHM);	
+		}
+		
+		SecretKeySpec signingKey = new SecretKeySpec(key, HMAC_MD5_ALGORITHM);
+		cachedMac.init(signingKey);
+        return cachedMac.doFinal(data);
+    }
+}
 
 public class SuisePgExt {
 	
+	private static final HmacMd5 keyedHashFunc = new HmacMd5();
+	private static final Decoder b64Decoder = Base64.getDecoder();
+	private static final Encoder b64Encoder = Base64.getEncoder();
+	
 	@Function(onNullInput=RETURNS_NULL, effects=IMMUTABLE)
-	public static String H(String searchToken, String pseudorandomVal) {
+	public static int H(String index, String searchToken) {
 		
-		Decoder b64Decoder = Base64.getDecoder();
-		
-		byte[] a = b64Decoder.decode(searchToken);
-		byte[] b = b64Decoder.decode(pseudorandomVal);
+		if (index==null || index.isEmpty()){
+			return 0;
+		}else if (searchToken==null || searchToken.isEmpty()){
+			return 0;
+		}else{
+			/* Decoder b64Decoder = Base64.getDecoder(); */
+			byte[] indexBytes = b64Decoder.decode(index);
+			
+			if (indexBytes==null || indexBytes.length<32){
+				return 0;
+			}
+			
+			byte[] searchTokenBytes = b64Decoder.decode(searchToken);
+			
+			if (searchTokenBytes==null || searchTokenBytes.length<16){
+				return 0;
+			}
+			
+			byte[] randomBytes = new byte[16];
+			byte[] hashBytes = new byte[16];
+			
+			//first 16 bytes are the hash value
+            System.arraycopy(indexBytes, 0, hashBytes, 0, 16);
+			
+			//last 16 bytes are the random number
+            System.arraycopy(indexBytes, 16, randomBytes, 0, 16);
+			
+			byte[] hashedTokenBytes = null;
+			
+			try{
+				hashedTokenBytes = keyedHashFunc.getHash(searchTokenBytes, randomBytes);
+			}catch(Exception ex){
+				return 0;
+			}
 
-		byte[] c = new byte[a.length + b.length];
-		System.arraycopy(a, 0, c, 0, a.length);
-		System.arraycopy(b, 0, c, a.length, b.length);
-
-		MessageDigest md = null;
-		byte[] digest = null;
-		try {
-			md = MessageDigest.getInstance("MD5");
-			digest = md.digest(c);
-		} catch (NoSuchAlgorithmException e) {
-			e.printStackTrace();
+			if (Arrays.equals(hashBytes, hashedTokenBytes)) {
+				return 1;
+			}
+			return 0;
 		}
-
-		if (digest == null) {
-			return null;
-		}
-
-		return Base64.getEncoder().encodeToString(digest);
     }
 	
 	@Function(onNullInput=RETURNS_NULL, effects=IMMUTABLE)
-	public static String R(int seed) {
-		byte[] bytes = new byte[16];
-        Random rnd = new Random(seed);
-        rnd.nextBytes(bytes);
-		return Base64.getEncoder().encodeToString(bytes);
-    }
+	public static String getRandomBytes(String index){
+		if (index==null || index.isEmpty()){
+			return null;
+		}else{
+			byte[] indexBytes = b64Decoder.decode(index);
+			byte[] randomBytes = new byte[16];
+			//last 16 bytes are the random number
+            System.arraycopy(indexBytes, 16, randomBytes, 0, 16);
+			return b64Encoder.encodeToString(randomBytes);
+		}
+	}
+	
+	@Function(onNullInput=RETURNS_NULL, effects=IMMUTABLE)
+	public static String getHashBytes(String index){
+		if (index==null || index.isEmpty()){
+			return null;
+		}else{
+			byte[] indexBytes = b64Decoder.decode(index);
+			byte[] hashBytes = new byte[16];
+			//first 16 bytes are the hash value
+            System.arraycopy(indexBytes, 0, hashBytes, 0, 16);
+			return b64Encoder.encodeToString(hashBytes);
+		}
+	}
 }
