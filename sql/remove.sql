@@ -1,0 +1,1 @@
+select sqlj.remove_jar('pgext',true);
